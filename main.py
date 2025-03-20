@@ -6,14 +6,15 @@ from pathlib import Path
 import shutil
 import logging
 from qdrant_client import QdrantClient, models
+import asyncio
 
 # Import configuration and utilities
 import config
 from utils import (
     initialize_session_state, monitor_memory_usage, clear_chat_history,
-    clear_all_resources, download_document_from_url, initialize_llm,
+    clear_all_resources, download_document_from_url_async, initialize_llm,
     load_and_index_document, load_query_engine_from_db, get_document_list,
-    select_active_document
+    select_active_document, save_to_uploaded_files
 )
 
 # Configure logging
@@ -83,7 +84,7 @@ def create_sidebar(user_session_id):
             
             # URL input
             url = st.text_input("Or enter document URL:", 
-                               help="Enter a URL to a document (PDF, DOCX, TXT, etc.)")
+                               help="Enter a URL to a document (PDF, DOCX, TXT, etc.) or a web page (e.g., Wikipedia, GitHub README)")
             
             # Generate document key
             document_key = str(uuid.uuid4())
@@ -97,18 +98,25 @@ def create_sidebar(user_session_id):
                         with open(file_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         
+                        # Save to uploaded_files directory
+                        saved_file_path = save_to_uploaded_files(file_path)
+                        
                         # Load and index the document
-                        if load_and_index_document(file_path, document_key):
+                        if load_and_index_document(saved_file_path, document_key):
                             st.success(f"Document '{uploaded_file.name}' processed successfully!")
             
             # Process URL
             elif url:
                 if st.button("Process URL", key="process_url"):
                     with tempfile.TemporaryDirectory() as temp_dir:
-                        file_path = download_document_from_url(url, temp_dir)
+                        # Download the document or scrape the web page
+                        file_path = asyncio.run(download_document_from_url_async(url, temp_dir))
                         if file_path:
+                            # Save to uploaded_files directory
+                            saved_file_path = save_to_uploaded_files(file_path)
+                            
                             # Load and index the document
-                            if load_and_index_document(file_path, document_key):
+                            if load_and_index_document(saved_file_path, document_key):
                                 st.success(f"Document from URL processed successfully!")
         
         # Document list and delete functionality
@@ -239,26 +247,31 @@ def create_main_content():
                 response_text = ""
                 
                 try:
-                    # Get query engine for the active document
-                    query_engine = load_query_engine_from_db(
-                        llm_model_name=config.DEFAULT_LLM_MODEL,
-                        embed_model_name=config.DEFAULT_EMBEDDING_MODEL,
-                        document_id=st.session_state.document_key
-                    )
-                    
-                    if not query_engine:
-                        st.error("Failed to initialize query engine.")
-                        return
-                    
-                    # Stream response
-                    response = query_engine.query(query)
-                    for text in response.response_gen:
-                        response_text += text
-                        response_container.markdown(response_text + "▌")
-                    
-                    # Final response
-                    response_container.markdown(response_text)
-                    st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
+                    # Display "Thinking..." message
+                    with st.status("Thinking...", expanded=False) as status:
+                        # Get query engine for the active document
+                        query_engine = load_query_engine_from_db(
+                            llm_model_name=config.DEFAULT_LLM_MODEL,
+                            embed_model_name=config.DEFAULT_EMBEDDING_MODEL,
+                            document_id=st.session_state.document_key
+                        )
+                        
+                        if not query_engine:
+                            st.error("Failed to initialize query engine.")
+                            return
+                        
+                        # Stream response
+                        response = query_engine.query(query)
+                        for text in response.response_gen:
+                            response_text += text
+                            response_container.markdown(response_text + "▌")
+                        
+                        # Final response
+                        response_container.markdown(response_text)
+                        st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
+                        
+                        # Update status to indicate completion
+                        status.update(label="Response ready!", state="complete")
                     
                 except Exception as e:
                     logger.error(f"Query error: {str(e)}")

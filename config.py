@@ -41,12 +41,15 @@ MEMORY_WARNING_THRESHOLD: float = 85.0  # percentage
 
 # Default prompt template
 DEFAULT_PROMPT_TEMPLATE: str = (
-    "Context information is below.\n"
+    "You are an intelligent assistant that provides accurate, concise, and context-aware answers. "
+    "Use the following context to answer the query. If the context does not provide enough information, "
+    "or if the query is unrelated to the context, respond with 'I don't know!'.\n\n"
     "---------------------\n"
+    "Context:\n"
     "{context_str}\n"
     "---------------------\n"
-    "Given the context above, provide a concise and precise answer. If unsure, say 'I don't know!'.\n"
     "Query: {query_str}\n"
+    "Answer the query directly and concisely, using only the context provided. Do not add extra information or opinions.\n"
     "Answer: "
 )
 
@@ -58,7 +61,16 @@ LOGGER_NAME: str = "gyaani_ai"
 # Paths
 TEMP_DIR: Path = Path(os.environ.get("GYAANI_AI_TEMP_DIR", "/tmp/gyaani_ai"))
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+# config.py
 
+# List of allowed file types
+ALLOWED_FILE_TYPES = ["pdf", "txt", "html", "htm", "docx", "md"]
+
+# List of domains to treat as web pages
+WEB_PAGE_DOMAINS = ["wikipedia.org", "github.com"]
+
+# List of file extensions to treat as web pages
+WEB_PAGE_EXTENSIONS = [".html", ".htm", ".php"]
  
 def is_docker_running():
     """Check if Docker is installed and running."""
