@@ -1,4 +1,3 @@
-```markdown
 # GyaaniAI 🧠
 
 GyaaniAI is an AI-powered document assistant designed to help users interact with and extract knowledge from various document formats. It leverages advanced language models and vector databases to provide accurate, context-aware answers to user queries.
@@ -94,6 +93,3 @@ For any questions or issues, please open an issue on GitHub or contact the maint
 
 **GyaaniAI - Where Knowledge Meets AI**  
 © Piyush 2025
-```
-
-This `README.md` provides a comprehensive overview of the GyaaniAI project, including installation instructions, usage guidelines, configuration details, and licensing information. It is designed to be professional and informative, suitable for both users and contributors.
