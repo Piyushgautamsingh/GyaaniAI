@@ -33,6 +33,7 @@ def main():
     
     # Initialize session state
     initialize_session_state()
+    config.ensure_qdrant_collection()
     
     # Get user session ID
     user_session_id = st.session_state.session_id

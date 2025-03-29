@@ -30,6 +30,7 @@ from functools import lru_cache
 import config
 
 from docx import Document as DocxDocument
+OLLAMA_API_BASE_URL = "http://ollama:11434"
 
 # Setup logging
 logging.basicConfig(level=getattr(logging, config.LOG_LEVEL), 
@@ -235,11 +236,11 @@ def initialize_llm(model_name: str = config.DEFAULT_LLM_MODEL, request_timeout: 
     """Initialize the LLM model with fallback."""
     try:
         logger.info(f"Initializing LLM with model: {model_name}")
-        return Ollama(model=model_name, request_timeout=request_timeout)
+        return Ollama(model=model_name, request_timeout=request_timeout,base_url=config.OLLAMA_API_URL)
     except Exception as e:
         logger.error(f"Error initializing LLM: {str(e)}. Trying fallback model.")
         try:
-            return Ollama(model=config.FALLBACK_LLM_MODEL, request_timeout=request_timeout)
+            return Ollama(model=config.DEFAULT_LLM_MODEL, request_timeout=request_timeout,base_url=config.OLLAMA_API_URL)
         except Exception as e:
             logger.error(f"Fallback LLM initialization failed: {str(e)}")
             st.error("Failed to initialize LLM. Please check your configuration.")
@@ -275,39 +276,50 @@ def cleanup_old_documents(max_docs: int = config.MAX_DOCUMENTS_PER_SESSION) -> N
         # Update session state
         st.session_state.documents = remaining_documents
         logger.info(f"Cleaned up {len(documents_to_remove)} old documents")
-
 def ensure_qdrant_collection(model_name: str) -> Optional[QdrantClient]:
     """Ensure Qdrant collection exists with proper vector dimensions and payload indexing."""
     try:
+        # Initialize Qdrant client
         qdrant_client = QdrantClient(
-            host=config.QDRANT_DB_HOST, 
-            port=config.QDRANT_DB_PORT, 
+            host=config.QDRANT_DB_HOST,
+            port=config.QDRANT_DB_PORT,
             timeout=config.QDRANT_TIMEOUT
         )
+        logger.info(f"Qdrant client initialized with host: {config.QDRANT_DB_HOST}, port: {config.QDRANT_DB_PORT}")
 
         # Get embedding dimensions for the model
         vector_size = config.get_embedding_dimensions(model_name)
+        logger.info(f"Embedding dimensions for model {model_name}: {vector_size}")
 
         # Check if collection exists
         collections = qdrant_client.get_collections()
         collection_names = [collection.name for collection in collections.collections]
+        logger.info(f"Existing collections: {collection_names}")
 
         if config.DOCUMENT_COLLECTION_NAME not in collection_names:
             # Create new collection with proper dimensions and payload indexing
+            logger.info(f"Creating new collection: {config.DOCUMENT_COLLECTION_NAME}")
             qdrant_client.recreate_collection(
                 collection_name=config.DOCUMENT_COLLECTION_NAME,
-                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-                payload_schema={
-                    "source": models.PayloadSchemaType.KEYWORD,
-                    "timestamp": models.PayloadSchemaType.INTEGER,
-                    "document_key": models.PayloadSchemaType.KEYWORD
-                }
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
             )
             logger.info(f"Created collection: {config.DOCUMENT_COLLECTION_NAME} with dimension {vector_size}.")
         else:
             # Verify vector dimensions match
             collection_info = qdrant_client.get_collection(config.DOCUMENT_COLLECTION_NAME)
-            existing_size = collection_info.config.params.vectors.size
+            # Fix here: Access size properly based on the response structure
+            if hasattr(collection_info.config.params.vectors, 'size'):
+                # If vectors is an object with size attribute
+                existing_size = collection_info.config.params.vectors.size
+            elif isinstance(collection_info.config.params.vectors, dict):
+                # If vectors is a dictionary
+                existing_size = collection_info.config.params.vectors.get('size')
+            else:
+                # Fallback case
+                logger.warning("Could not determine vector size from collection info")
+                return qdrant_client
+                
+            logger.info(f"Existing collection vector size: {existing_size}")
 
             if existing_size != vector_size:
                 logger.warning(
@@ -316,12 +328,7 @@ def ensure_qdrant_collection(model_name: str) -> Optional[QdrantClient]:
                 )
                 qdrant_client.recreate_collection(
                     collection_name=config.DOCUMENT_COLLECTION_NAME,
-                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-                    payload_schema={
-                        "source": models.PayloadSchemaType.KEYWORD,
-                        "timestamp": models.PayloadSchemaType.INTEGER,
-                        "document_key": models.PayloadSchemaType.KEYWORD
-                    }
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
                 )
                 logger.info(f"Recreated collection with new dimension {vector_size}.")
 
@@ -359,7 +366,7 @@ def extract_text_from_html(file_path: str) -> Optional[str]:
 def get_embedding_with_prefix(texts: List[str], prefix: str = "Represent this document for retrieval: ", embed_model_name: str = config.DEFAULT_EMBEDDING_MODEL) -> List[List[float]]:
     """Generate embeddings for a batch of texts with a prefix for better retrieval."""
     prefixed_texts = [prefix + text for text in texts]
-    embed_model = OllamaEmbedding(model_name=embed_model_name)
+    embed_model = OllamaEmbedding(model_name=embed_model_name,base_url=OLLAMA_API_BASE_URL)
     return embed_model.get_text_embedding_batch(prefixed_texts)  # Use batch processing
 
 @st.cache_resource
@@ -440,6 +447,11 @@ def load_and_index_document(_file_path: str, document_key: str, embed_model_name
         st.error(f"Indexing error: {str(e)}")
         return None
 
+    except Exception as e:
+        logger.error(f"Indexing error: {str(e)}")
+        st.error(f"Indexing error: {str(e)}")
+        return None
+
 @lru_cache(maxsize=100)  # Cache up to 100 queries
 def cached_llm_response(query: str, llm_model_name: str = config.DEFAULT_LLM_MODEL) -> str:
     """Cache LLM responses for common queries."""
@@ -481,7 +493,7 @@ def load_query_engine_from_db(llm_model_name: str = config.DEFAULT_LLM_MODEL,
         )
 
         # Configure embeddings and LLM (preload models if possible)
-        Settings.embed_model = OllamaEmbedding(model_name=embed_model_name)
+        Settings.embed_model = OllamaEmbedding(model_name=embed_model_name,base_url=OLLAMA_API_BASE_URL)
         Settings.llm = initialize_llm(model_name=llm_model_name)
 
         # Load the index from the vector store with optional filter
@@ -533,18 +545,21 @@ def load_query_engine_from_db(llm_model_name: str = config.DEFAULT_LLM_MODEL,
                 logger.error(f"Error during reranking: {str(e)}")
                 return documents  # Fallback to original documents if reranking fails
 
-        # Update the query engine to include summarization and "Thinking..." message
+        # Update the query engine to include reranking and summarization
         def query_with_summary(query: str) -> str:
-            """Query the engine and summarize the results with a 'Thinking...' message."""
+            """Query the engine, rerank results, and summarize with a 'Thinking...' message."""
             with st.status("Thinking...", expanded=False) as status:
-                # Embed the question for similarity search
-                query_embedding = get_embedding_with_prefix(
-                    query, 
-                    prefix="Represent this question for retrieval: ", 
-                    embed_model_name=embed_model_name
-                )
+                # Step 1: Perform vector search
                 results = query_engine.query(query)
-                summarized_answer = summarize_answer(query, results, llm_model_name=llm_model_name)
+
+                # Step 2: Extract text content from results
+                documents = [node.text for node in results.source_nodes]
+
+                # Step 3: Rerank the documents
+                reranked_documents = rerank_query(query, documents)
+
+                # Step 4: Summarize the reranked results
+                summarized_answer = summarize_answer(query, reranked_documents, llm_model_name=llm_model_name)
                 status.update(label="Response ready!", state="complete")
                 return summarized_answer
 

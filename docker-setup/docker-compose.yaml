@@ -1,0 +1,69 @@
+version: '3.5'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker-setup/Dockerfile
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - HTTP_PROXY=http://squid-proxy:3128
+      - HTTPS_PROXY=http://squid-proxy:3128
+      - QDRANT_DB_HOST=qdrant
+      - QDRANT_DB_PORT=6333
+    ports:
+      - "8501:8501"
+    networks:
+      - lab
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.3
+    ports:
+      - "7333:6333"
+      - "7334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    restart: unless-stopped
+    networks:
+      - lab
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      - HTTP_PROXY=http://squid-proxy:3128 
+      - HTTPS_PROXY=http://squid-proxy:3128
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ollama list || exit 1
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 10s
+    networks:
+      - lab
+  # ollama-models-pull:
+  #   container_name: ollama-models-pull
+  #   image: curlimages/curl:latest
+  #   command: >
+  #     http://ollama:11434/api/pull -d '{"name":"mistral"}'
+  #   depends_on:
+  #     ollama:
+  #       condition: service_healthy
+  #   networks:
+  #     - lab
+
+volumes:
+  qdrant_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  lab:
+    external: true
