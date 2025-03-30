@@ -73,54 +73,64 @@ def manage_uploaded_files(file_path, document_key):
 def create_sidebar(user_session_id):
     """Create sidebar for document upload, management, and settings."""
     with st.sidebar:
-        st.subheader("Document Management")
+        # Sidebar header with icon
+        st.markdown("""
+        <div style="display: flex; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0;">📂 Document Management</h2>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Upload document section
-        with st.expander("Upload Document", expanded=True):
-            # File uploader
-            uploaded_file = st.file_uploader("Upload a document", 
+        with st.expander("📤 Upload Document", expanded=True):
+            # File uploader with better styling
+            uploaded_file = st.file_uploader("Choose a file", 
                                            type=config.ALLOWED_FILE_TYPES,
                                            help="Supported file types: " + ", ".join(config.ALLOWED_FILE_TYPES))
             
-            # URL input
-            url = st.text_input("Or enter document URL:", 
-                               help="Enter a URL to a document (PDF, DOCX, TXT, etc.) or a web page (e.g., Wikipedia, GitHub README)")
+            # URL input with divider
+            st.markdown("<div style='margin: 10px 0; text-align: center; color: #666;'>or</div>", 
+                       unsafe_allow_html=True)
+            url = st.text_input("Enter document URL", 
+                               placeholder="https://example.com/document.pdf",
+                               help="Enter a URL to a document (PDF, DOCX, TXT, etc.) or a web page")
             
             # Generate document key
             document_key = str(uuid.uuid4())
             
-            # Process uploaded file
+            # Process uploaded file with loading state
             if uploaded_file is not None:
                 if st.button("Process Document", key="process_upload"):
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        # Save uploaded file to temp directory
-                        file_path = os.path.join(temp_dir, uploaded_file.name)
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        
-                        # Save to uploaded_files directory
-                        saved_file_path = save_to_uploaded_files(file_path)
-                        
-                        # Load and index the document
-                        if load_and_index_document(saved_file_path, document_key):
-                            st.success(f"Document '{uploaded_file.name}' processed successfully!")
-            
-            # Process URL
-            elif url:
-                if st.button("Process URL", key="process_url"):
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        # Download the document or scrape the web page
-                        file_path = asyncio.run(download_document_from_url_async(url, temp_dir))
-                        if file_path:
+                    with st.spinner("Processing document..."):
+                        with tempfile.TemporaryDirectory() as temp_dir:
+                            # Save uploaded file to temp directory
+                            file_path = os.path.join(temp_dir, uploaded_file.name)
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+                            
                             # Save to uploaded_files directory
                             saved_file_path = save_to_uploaded_files(file_path)
                             
                             # Load and index the document
                             if load_and_index_document(saved_file_path, document_key):
-                                st.success(f"Document from URL processed successfully!")
+                                st.toast(f"✅ Document '{uploaded_file.name}' processed successfully!", icon="✅")
+            
+            # Process URL with loading state
+            elif url:
+                if st.button("Process URL", key="process_url"):
+                    with st.spinner("Downloading and processing URL..."):
+                        with tempfile.TemporaryDirectory() as temp_dir:
+                            # Download the document or scrape the web page
+                            file_path = asyncio.run(download_document_from_url_async(url, temp_dir))
+                            if file_path:
+                                # Save to uploaded_files directory
+                                saved_file_path = save_to_uploaded_files(file_path)
+                                
+                                # Load and index the document
+                                if load_and_index_document(saved_file_path, document_key):
+                                    st.toast("✅ Document from URL processed successfully!", icon="✅")
         
-        # Document list and delete functionality
-        with st.expander("Your Documents", expanded=True):
+        # Document list with improved cards
+        with st.expander("📄 Your Documents", expanded=True):
             if not st.session_state.documents:
                 st.info("No documents found. Please upload a document to begin.")
             else:
@@ -133,34 +143,31 @@ def create_sidebar(user_session_id):
                 
                 # Display the unique documents with delete buttons
                 for doc_name, doc in documents_by_name.items():
-                    with st.container(border=True):
-                        cols = st.columns([3, 1])
-                        with cols[0]:
-                            st.markdown(f"**{doc_name}**")
-                        with cols[1]:
-                            # Custom CSS for larger delete button
-                            st.markdown(
-                                """
-                                <style>
-                                    .stButton button {
-                                        width: 100%;
-                                        height: 40px;
-                                        font-size: 16px;
-                                        padding: 0;
-                                    }
-                                </style>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                            if st.button("Delete", key=f"delete_{doc['key']}"):
+                    with st.container():
+                        st.markdown(f"""
+                        <div class="document-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div style="font-weight: 500;">{doc_name}</div>
+                                <button onclick="document.getElementById('delete_{doc['key']}').click()" 
+                                        style="background: #ff4b4b; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer;">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Hidden button for actual deletion
+                        if st.button("Delete", key=f"delete_{doc['key']}", help=f"Delete {doc_name}"):
+                            with st.spinner(f"Deleting {doc_name}..."):
                                 delete_document(doc["key"])
         
-        # Settings section
-        with st.expander("Settings"):
+        # Settings section with icons
+        with st.expander("⚙️ Settings"):
             # LLM model selection
             llm_model = st.selectbox("LLM Model", 
                                     options=config.AVAILABLE_LLM_MODELS,
-                                    index=config.AVAILABLE_LLM_MODELS.index(config.DEFAULT_LLM_MODEL))
+                                    index=config.AVAILABLE_LLM_MODELS.index(config.DEFAULT_LLM_MODEL),
+                                    help="Select the language model to use for generating responses")
             
             # Embedding model selection
             embed_model_names = [model["display_name"] for model in config.AVAILABLE_EMBEDDING_MODELS]
@@ -171,7 +178,8 @@ def create_sidebar(user_session_id):
                     break
             selected_embed_display = st.selectbox("Embedding Model", 
                                                options=embed_model_names,
-                                               index=default_index)
+                                               index=default_index,
+                                               help="Select the model to use for document embeddings")
             selected_embed_model = config.DEFAULT_EMBEDDING_MODEL  # fallback
             for model in config.AVAILABLE_EMBEDDING_MODELS:
                 if model["display_name"] == selected_embed_display:
@@ -181,14 +189,22 @@ def create_sidebar(user_session_id):
             # Custom prompt template
             custom_prompt = st.text_area("Custom Prompt Template", 
                                        value=config.DEFAULT_PROMPT_TEMPLATE,
-                                       height=150)
+                                       height=150,
+                                       help="Modify the default prompt template for the LLM")
         
-        # Resource management
-        with st.expander("Resource Management"):
-            if st.button("Clear Chat History"):
-                clear_chat_history()
-            if st.button("Clear All Resources"):
-                clear_all_resources()
+        # Resource management with icons
+        with st.expander("🗑️ Resource Management"):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Clear Chat History", help="Clear all chat messages"):
+                    with st.spinner("Clearing chat history..."):
+                        clear_chat_history()
+                        st.toast("Chat history cleared!", icon="✅")
+            with col2:
+                if st.button("Clear All Resources", help="Clear all documents and chat history"):
+                    with st.spinner("Clearing all resources..."):
+                        clear_all_resources()
+                        st.toast("All resources cleared!", icon="✅")
 
 def delete_document(document_key):
     """Delete a document from the system."""
@@ -215,7 +231,8 @@ def delete_document(document_key):
             st.session_state.document_key = None
             st.session_state.scanned = False
         
-        st.success("Document deleted successfully!")
+        st.toast("Document deleted successfully!", icon="✅")
+        time.sleep(1)  # Give time for the toast to appear
         st.rerun()
     except Exception as e:
         logger.error(f"Error deleting document: {str(e)}")
@@ -223,16 +240,16 @@ def delete_document(document_key):
 
 def create_main_content():
     """Create the main content area for chat."""
-    st.subheader("Chat with your Document")
+    st.subheader("💬 Chat with your Document")
     
-    # Display chat messages
+    # Display chat messages with better styling
     for message in st.session_state.get("chat_messages", []):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
     # Chat input
     if not st.session_state.scanned:
-        st.info("Please upload and process a document first.")
+        st.info("ℹ️ Please upload and process a document first.")
     else:
         query = st.chat_input("Ask a question about your document...")
         if query:
@@ -247,8 +264,8 @@ def create_main_content():
                 response_text = ""
                 
                 try:
-                    # Display "Thinking..." message
-                    with st.status("Thinking...", expanded=False) as status:
+                    # Custom thinking animation
+                    with st.status("🤔 Thinking...", expanded=False) as status:
                         # Get query engine for the active document
                         query_engine = load_query_engine_from_db(
                             llm_model_name=config.DEFAULT_LLM_MODEL,
@@ -260,7 +277,7 @@ def create_main_content():
                             st.error("Failed to initialize query engine.")
                             return
                         
-                        # Stream response
+                        # Stream response with typing indicator
                         response = query_engine.query(query)
                         for text in response.response_gen:
                             response_text += text
@@ -271,7 +288,7 @@ def create_main_content():
                         st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
                         
                         # Update status to indicate completion
-                        status.update(label="Response ready!", state="complete")
+                        status.update(label="✅ Response ready!", state="complete")
                     
                 except Exception as e:
                     logger.error(f"Query error: {str(e)}")

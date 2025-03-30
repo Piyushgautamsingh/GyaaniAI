@@ -289,26 +289,10 @@ def ensure_qdrant_collection(model_name: str) -> Optional[QdrantClient]:
         vector_size = config.get_embedding_dimensions(model_name)
 
         # Check if collection exists
-        collections = qdrant_client.get_collections()
-        collection_names = [collection.name for collection in collections.collections]
-
-        if config.DOCUMENT_COLLECTION_NAME not in collection_names:
-            # Create new collection with proper dimensions and payload indexing
-            qdrant_client.recreate_collection(
-                collection_name=config.DOCUMENT_COLLECTION_NAME,
-                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-                payload_schema={
-                    "source": models.PayloadSchemaType.KEYWORD,
-                    "timestamp": models.PayloadSchemaType.INTEGER,
-                    "document_key": models.PayloadSchemaType.KEYWORD
-                }
-            )
-            logger.info(f"Created collection: {config.DOCUMENT_COLLECTION_NAME} with dimension {vector_size}.")
-        else:
-            # Verify vector dimensions match
+        try:
             collection_info = qdrant_client.get_collection(config.DOCUMENT_COLLECTION_NAME)
             existing_size = collection_info.config.params.vectors.size
-
+            
             if existing_size != vector_size:
                 logger.warning(
                     f"Vector dimension mismatch: Collection has {existing_size}, model needs {vector_size}. "
@@ -316,14 +300,17 @@ def ensure_qdrant_collection(model_name: str) -> Optional[QdrantClient]:
                 )
                 qdrant_client.recreate_collection(
                     collection_name=config.DOCUMENT_COLLECTION_NAME,
-                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-                    payload_schema={
-                        "source": models.PayloadSchemaType.KEYWORD,
-                        "timestamp": models.PayloadSchemaType.INTEGER,
-                        "document_key": models.PayloadSchemaType.KEYWORD
-                    }
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
                 )
                 logger.info(f"Recreated collection with new dimension {vector_size}.")
+                
+        except Exception as e:
+            # Collection likely doesn't exist, create it
+            logger.info(f"Creating new collection: {config.DOCUMENT_COLLECTION_NAME}")
+            qdrant_client.recreate_collection(
+                collection_name=config.DOCUMENT_COLLECTION_NAME,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+            )
 
         return qdrant_client
     except Exception as e:
