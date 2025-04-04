@@ -20,12 +20,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from qdrant_client.http import models
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import torch
 import asyncio
 import shutil
 import aiohttp
 from functools import lru_cache
 import datetime
+import time
 
 # Import configuration
 import config
@@ -67,69 +67,82 @@ def cleanup_old_indices():
     except Exception as e:
         logger.error(f"Error cleaning up old collections: {str(e)}")
 
-async def scrape_web_page_with_children(url: str, max_depth: int = 2) -> str:
-    """Scrape content from a web page and its children up to max_depth levels."""
+async def scrape_web_page_with_children(url: str, max_depth: int = 1) -> str:
+    """Scrape main content from a web page and its children with improved content extraction."""
     try:
-        visited_urls = set()  # Track visited URLs to prevent cycles
+        visited_urls = set()
         return await _scrape_recursive(url, max_depth, 0, visited_urls)
     except Exception as e:
         logger.error(f"Error scraping web page {url}: {str(e)}")
         return None
 
 async def _scrape_recursive(url: str, max_depth: int, current_depth: int, visited_urls: set) -> str:
-    """Recursive helper function for web scraping with cycle prevention."""
+    """Improved recursive helper that focuses on main content."""
     if current_depth > max_depth or url in visited_urls:
         return ""
     
     visited_urls.add(url)
+    text = ""
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=config.REQUEST_TIMEOUT) as response:
                 response.raise_for_status()
                 
-                # Check if this is actually HTML content
-                content_type = response.headers.get('Content-Type', '')
-                if not content_type.startswith('text/html'):
+                if not response.content_type.startswith('text/html'):
                     return ""
-                    
+                
                 html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
                 
-                soup = BeautifulSoup(html, "html.parser")
+                # Remove unwanted elements
+                for element in soup(['nav', 'footer', 'script', 'style', 'iframe', 
+                                   'header', 'aside', 'form', 'button', 'noscript']):
+                    element.decompose()
                 
-                # Extract main content
-                text = ""
-                for element in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6"]):
-                    text += element.get_text() + "\n"
+                # Focus on main content areas
+                main_content = soup.find(['main', 'article']) or soup.find('div', role='main') or soup.body
                 
-                # If we haven't reached max depth, look for child links
-                if current_depth < max_depth:
+                if main_content:
+                    # Extract clean text from meaningful elements
+                    text_elements = main_content.find_all(['p', 'h1', 'h2', 'h3', 'section'])
+                    text = "\n\n".join([
+                        element.get_text(' ', strip=True) 
+                        for element in text_elements
+                        if len(element.get_text(strip=True)) > 30  # Minimum length check
+                    ])
+                
+                # If we haven't reached max depth, look for relevant child links
+                if current_depth < max_depth and main_content:
                     base_url = "{0.scheme}://{0.netloc}".format(urlparse(url))
                     links = set()
                     
-                    for link in soup.find_all("a", href=True):
-                        href = link["href"]
-                        if not href or href.startswith('#'):
+                    # Only look for links in main content
+                    for link in main_content.find_all('a', href=True):
+                        href = link['href']
+                        if not href or href.startswith('#') or 'mailto:' in href:
                             continue
-                            
+                        
                         # Handle relative URLs
-                        if href.startswith("/"):
+                        if href.startswith('/'):
                             href = base_url + href
-                        elif not href.startswith("http"):
+                        elif not href.startswith('http'):
                             href = urljoin(base_url, href)
                         
-                        # Validate the URL before adding
+                        # Validate URL
                         try:
-                            parsed_href = urlparse(href)
-                            if (parsed_href.netloc == urlparse(url).netloc 
+                            parsed = urlparse(href)
+                            if (parsed.netloc == urlparse(url).netloc 
                                 and validate_url(href)
                                 and href not in visited_urls):
                                 links.add(href)
                         except:
                             continue
                     
-                    # Scrape child pages with limited concurrency
-                    semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent requests
+                    # Limit child pages and concurrent requests
+                    links = list(links)[:config.MAX_CHILD_PAGES]
+                    semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
+                    
                     async def limited_scrape(link):
                         async with semaphore:
                             return await _scrape_recursive(
@@ -137,18 +150,18 @@ async def _scrape_recursive(url: str, max_depth: int, current_depth: int, visite
                             )
                     
                     child_texts = await asyncio.gather(
-                        *[limited_scrape(link) for link in list(links)[:config.MAX_CHILD_PAGES]],
-                        return_exceptions=True  # Prevent one failure from stopping all
+                        *[limited_scrape(link) for link in links],
+                        return_exceptions=True
                     )
                     
-                    # Filter out any exceptions that occurred
-                    valid_texts = [
+                    # Combine results
+                    text += "\n\n".join(
                         t for t in child_texts 
                         if isinstance(t, str) and t.strip()
-                    ]
-                    text += "\n".join(valid_texts)
+                    )
                 
                 return text.strip()
+                
     except Exception as e:
         logger.error(f"Error scraping {url}: {str(e)}")
         return ""
@@ -296,39 +309,31 @@ def scrape_web_page(url: str) -> Optional[str]:
         return None
 
 async def download_document_from_url_async(url: str, temp_dir: str) -> Optional[str]:
-    """Download a document from a URL asynchronously or scrape a web page with improved error handling and recursion limits."""
+    """Download a document or scrape a web page with improved content extraction."""
     try:
         if not validate_url(url):
-            st.error("Invalid URL format. Please include http:// or https:// and a valid domain.")
+            st.error("Invalid URL format. Please check the URL and try again.")
             return None
 
-        # Set conservative recursion limit for this operation
-        import sys
-        original_recursion_limit = sys.getrecursionlimit()
-        sys.setrecursionlimit(100)  # Set safe recursion limit
+        parsed = urlparse(url)
         
-        try:
-            parsed = urlparse(url)
-            logger.info(f"Processing URL: {url}")
-            
-            # First try to determine if this is a downloadable file
-            is_downloadable = any(
-                parsed.path.lower().endswith(ext) 
-                for ext in config.ALLOWED_FILE_TYPES
-            )
+        # Check if this is a downloadable file
+        is_downloadable = any(
+            parsed.path.lower().endswith(ext) 
+            for ext in config.ALLOWED_FILE_TYPES
+        )
 
-            if not is_downloadable:
-                # If not obviously a file, check content type via HEAD request
-                async with aiohttp.ClientSession() as session:
-                    async with session.head(url, timeout=config.REQUEST_TIMEOUT) as response:
-                        response.raise_for_status()
-                        content_type = response.headers.get('Content-Type', '').lower()
-                        is_downloadable = any(
-                            ct in content_type 
-                            for ct in ['pdf', 'msword', 'wordprocessing', 'octet-stream']
-                        )
+        if not is_downloadable:
+            # Check content type via HEAD request
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url, timeout=config.REQUEST_TIMEOUT) as response:
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    is_downloadable = any(
+                        ct in content_type 
+                        for ct in ['pdf', 'msword', 'wordprocessing', 'octet-stream']
+                    )
 
-            if is_downloadable:
+        if is_downloadable:
                 # Handle file download
                 async with aiohttp.ClientSession() as session:
                     # GET request to download the file
@@ -366,46 +371,25 @@ async def download_document_from_url_async(url: str, temp_dir: str) -> Optional[
                         
                         logger.info(f"Successfully downloaded file from {url}")
                         return file_path
-            else:
-                # Treat as web page to scrape
-                text = await scrape_web_page_with_children(url)
-                if not text:
-                    st.error("Failed to scrape content from the web page.")
-                    return None
+        else:
+            # Use improved web scraper
+            text = await scrape_web_page_with_children(url)
+            if not text or len(text) < config.MIN_CONTENT_LENGTH:
+                st.error("Failed to extract meaningful content from this page.")
+                return None
                 
-                # Save the scraped content as a text file
-                filename = f"webpage_{parsed.netloc}.txt"
-                file_path = os.path.join(temp_dir, filename)
-                with open(file_path, "w", encoding="utf-8") as file:
-                    file.write(text)
-                
-                logger.info(f"Successfully scraped content from {url}")
-                return file_path
-                
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout while processing URL: {url}")
-            st.error("The request timed out. Please try again or check the URL.")
-            return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Client error while processing URL {url}: {str(e)}")
-            st.error(f"Error accessing the URL: {str(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error processing URL {url}: {str(e)}")
-            st.error(f"An unexpected error occurred: {str(e)}")
-            return None
-        finally:
-            # Restore original recursion limit
-            sys.setrecursionlimit(original_recursion_limit)
+            # Save cleaned content
+            filename = f"webpage_{parsed.netloc}.txt"
+            file_path = os.path.join(temp_dir, filename)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(f"URL: {url}\n\n")
+                f.write(text)
+            
+            return file_path
 
     except Exception as e:
-        logger.error(f"Error in URL processing pipeline: {str(e)}")
-        st.error(f"Error processing URL: {str(e)}")
-        return None
-
-    except Exception as e:
-        logger.error(f"Download error for URL {url}: {str(e)}")
-        st.error(f"Error downloading from URL: {str(e)}")
+        logger.error(f"Error processing URL {url}: {str(e)}")
+        st.error(f"Error processing this URL. Please try another page.")
         return None
 
 @st.cache_resource
@@ -608,11 +592,14 @@ def load_and_index_document(_file_path: str, document_key: str, embed_model_name
         st.error(f"Indexing error: {str(e)}")
         return None
 
-@lru_cache(maxsize=100)  # Cache up to 100 queries
+@lru_cache(maxsize=100)
 def cached_llm_response(query: str, llm_model_name: str = config.DEFAULT_LLM_MODEL) -> str:
-    """Cache LLM responses for common queries."""
+    """Cache LLM responses with timing information."""
+    start_time = time.time()
     llm = initialize_llm(model_name=llm_model_name)
-    return llm.complete(query).text
+    result = llm.complete(query).text
+    response_time = time.time() - start_time
+    return f"{result}\n\n⏱️ Generated in {response_time:.2f} seconds"
 
 def summarize_answer(query: str, documents: List[str]) -> str:
     """Summarize the retrieved documents to provide a concise answer."""

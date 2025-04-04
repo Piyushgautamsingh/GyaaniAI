@@ -10,7 +10,6 @@ import asyncio
 import datetime
 from typing import Dict
 import time
-os.environ["STREAMLIT_SERVER_ENABLE_FILE_WATCHER"] = "false"
 
 # Import configuration and utilities
 import config
@@ -153,12 +152,6 @@ def create_sidebar():
                                                 options=embed_model_names,
                                                 index=default_index,
                                                 help="Select the model to use for document embeddings")
-            
-            # Custom prompt template
-            custom_prompt = st.text_area("Custom Prompt Template", 
-                                       value=config.DEFAULT_PROMPT_TEMPLATE,
-                                       height=150,
-                                       help="Modify the default prompt template for the LLM")
 
         # Resource management with icons
         with st.expander("🗑️ Resource Management", expanded=False):
@@ -234,6 +227,8 @@ def create_main_content():
                 response_text = ""
                 
                 try:
+                    start_time = time.time()  # Start timing
+                    
                     with st.status("🤔 Thinking...", expanded=False) as status:
                         query_engine = load_query_engine_from_db(
                             llm_model_name=config.DEFAULT_LLM_MODEL,
@@ -250,9 +245,22 @@ def create_main_content():
                             response_text += text
                             response_container.markdown(response_text + "▌")
                         
+                        # Calculate response time
+                        end_time = time.time()
+                        response_time = end_time - start_time
+                        
+                        # Add response time to message
+                        response_text += f"\n\n⏱️ Response generated in {response_time:.2f} seconds"
                         response_container.markdown(response_text)
-                        st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
-                        status.update(label="✅ Response ready!", state="complete")
+                        st.session_state.chat_messages.append({
+                            "role": "assistant", 
+                            "content": response_text
+                        })
+                        
+                        status.update(
+                            label=f"✅ Response ready! ({response_time:.2f}s)", 
+                            state="complete"
+                        )
                     
                 except Exception as e:
                     logger.error(f"Query error: {str(e)}")
