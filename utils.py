@@ -1,7 +1,7 @@
 import os
 import uuid
 from uuid import uuid4
-import tempfile
+from web_crawler import crawl_website
 import logging
 import requests
 import streamlit as st
@@ -309,83 +309,24 @@ def scrape_web_page(url: str) -> Optional[str]:
         return None
 
 async def download_document_from_url_async(url: str, temp_dir: str) -> Optional[str]:
-    """Download a document or scrape a web page with improved content extraction."""
+    """Download a document from a URL asynchronously."""
     try:
         if not validate_url(url):
             st.error("Invalid URL format. Please check the URL and try again.")
             return None
 
-        parsed = urlparse(url)
+        # Use the new crawler for web pages
+        file_path = crawl_website(url, depth=1)
+        if not file_path:
+            st.error("Failed to extract content from this URL.")
+            return None
+
+        # Move to uploaded_files directory
+        filename = os.path.basename(file_path)
+        new_path = os.path.join(temp_dir, filename)
+        os.rename(file_path, new_path)
         
-        # Check if this is a downloadable file
-        is_downloadable = any(
-            parsed.path.lower().endswith(ext) 
-            for ext in config.ALLOWED_FILE_TYPES
-        )
-
-        if not is_downloadable:
-            # Check content type via HEAD request
-            async with aiohttp.ClientSession() as session:
-                async with session.head(url, timeout=config.REQUEST_TIMEOUT) as response:
-                    content_type = response.headers.get('Content-Type', '').lower()
-                    is_downloadable = any(
-                        ct in content_type 
-                        for ct in ['pdf', 'msword', 'wordprocessing', 'octet-stream']
-                    )
-
-        if is_downloadable:
-                # Handle file download
-                async with aiohttp.ClientSession() as session:
-                    # GET request to download the file
-                    async with session.get(url, timeout=config.REQUEST_TIMEOUT) as response:
-                        response.raise_for_status()
-                        
-                        # Get filename from Content-Disposition or URL path
-                        content_disposition = response.headers.get('Content-Disposition', '')
-                        if 'filename=' in content_disposition:
-                            filename = content_disposition.split('filename=')[1].strip('"\'')
-                        else:
-                            filename = os.path.basename(parsed.path) or "downloaded_file"
-                        
-                        # Clean filename
-                        filename = "".join(c for c in filename if c.isalnum() or c in "._- ").strip()
-                        if not filename:
-                            filename = "downloaded_file"
-                        
-                        # Add extension if missing
-                        if not os.path.splitext(filename)[1]:
-                            content_type = response.headers.get('Content-Type', '').lower()
-                            if 'pdf' in content_type:
-                                filename += '.pdf'
-                            elif 'msword' in content_type:
-                                filename += '.doc'
-                            elif 'wordprocessing' in content_type:
-                                filename += '.docx'
-                            else:
-                                filename += '.txt'
-
-                        file_path = os.path.join(temp_dir, filename)
-                        with open(file_path, "wb") as f:
-                            async for chunk in response.content.iter_chunked(1024*1024):  # 1MB chunks
-                                f.write(chunk)
-                        
-                        logger.info(f"Successfully downloaded file from {url}")
-                        return file_path
-        else:
-            # Use improved web scraper
-            text = await scrape_web_page_with_children(url)
-            if not text or len(text) < config.MIN_CONTENT_LENGTH:
-                st.error("Failed to extract meaningful content from this page.")
-                return None
-                
-            # Save cleaned content
-            filename = f"webpage_{parsed.netloc}.txt"
-            file_path = os.path.join(temp_dir, filename)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(f"URL: {url}\n\n")
-                f.write(text)
-            
-            return file_path
+        return new_path
 
     except Exception as e:
         logger.error(f"Error processing URL {url}: {str(e)}")
