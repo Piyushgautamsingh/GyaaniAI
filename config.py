@@ -68,8 +68,9 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_FILE_TYPES = ["pdf", "txt", "html", "htm", "docx", "md"]
 
 # Web crawling settings
-MAX_CRAWL_DEPTH = 1  # Reduced from 2 to focus on main page
+MAX_CRAWL_DEPTH = 2 # Reduced from 2 to focus on main page
 MAX_CHILD_PAGES = 3  # Fewer child pages for better quality
+CRAWL_TIMEOUT= 30  # Reduced timeout for faster response
 MAX_CONCURRENT_REQUESTS = 2  # Reduced concurrency
 MIN_CONTENT_LENGTH = 50  # Minimum characters to consider as valid content
 # Data retention settings
