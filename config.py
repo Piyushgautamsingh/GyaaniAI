@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 import init
 import subprocess
+import datetime
 
 # Core application settings
 APP_TITLE = "GyaaniAI 🧠"
@@ -66,11 +67,24 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 # List of allowed file types
 ALLOWED_FILE_TYPES = ["pdf", "txt", "html", "htm", "docx", "md"]
 
-# List of domains to treat as web pages
-WEB_PAGE_DOMAINS = ["wikipedia.org", "github.com"]
+# Web crawling settings
+MAX_CRAWL_DEPTH = 1  # Reduced from 2 to focus on main page
+MAX_CHILD_PAGES = 3  # Fewer child pages for better quality
+MAX_CONCURRENT_REQUESTS = 2  # Reduced concurrency
+MIN_CONTENT_LENGTH = 50  # Minimum characters to consider as valid content
+# Data retention settings
+DATA_RETENTION_DAYS = 3 
 
-# List of file extensions to treat as web pages
-WEB_PAGE_EXTENSIONS = [".html", ".htm", ".php"]
+WEB_PAGE_DOMAINS = ["wikipedia.org", "github.com", "medium.com", "news.ycombinator.com"]
+
+# Add this function to config.py
+def get_collection_name() -> str:
+    """Get the current daily collection name."""
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    return f"documents_{today}"
+
+# Update the DOCUMENT_COLLECTION_NAME to use the function
+DOCUMENT_COLLECTION_NAME: str = get_collection_name()
  
 def is_docker_running():
     """Check if Docker is installed and running."""
